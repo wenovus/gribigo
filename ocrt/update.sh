@@ -43,6 +43,7 @@ generator -path=public -output_file=oc.go \
     -generate_leaf_getters \
     -generate_delete \
     -generate_append \
+    -generate_populate_defaults \
     public/release/models/interfaces/openconfig-interfaces.yang \
     public/release/models/interfaces/openconfig-if-ip.yang \
     public/release/models/network-instance/openconfig-network-instance.yang \
