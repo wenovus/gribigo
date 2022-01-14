@@ -56,11 +56,35 @@ func periodic(period time.Duration, fn func()) {
 	}
 }
 
+type Queue interface {
+	Next(ctx context.Context) (interface{}, uint32, error)
+	Len() int
+	Close()
+}
+
+type UpdateFn func(*gpb.Notification) error
+
+type TaskRoutine func(Queue, UpdateFn, string, func()) error
+
+type Task struct {
+	Run    TaskRoutine
+	Paths  []*gpb.Path
+	Prefix *gpb.Path
+}
+
 // GNMIServer implements the gNMI server interface.
 type GNMIServer struct {
 	// The subscribe Server implements only Subscribe for gNMI.
 	*subscribe.Server
 	c *Collector
+}
+
+func (s *GNMIServer) RegisterTask(task Task) error {
+	queue, remove, err := s.Server.SubscribeLocal(s.c.name, task.Paths, task.Prefix)
+	if err != nil {
+		return err
+	}
+	return task.Run(queue, s.c.cache.GnmiUpdate, s.c.name, remove)
 }
 
 // New returns a new collector that listens on the specified addr (in the form host:port),
@@ -69,7 +93,7 @@ type GNMIServer struct {
 //
 // New returns the new collector, the address it is listening on in the form hostname:port
 // or any errors encounted whilst setting it up.
-func New(ctx context.Context, addr string, hostname string, sendMeta bool, opts ...grpc.ServerOption) (*Collector, string, error) {
+func New(ctx context.Context, addr string, hostname string, sendMeta bool, tasks []Task, opts ...grpc.ServerOption) (*Collector, string, error) {
 	c := &Collector{
 		inCh: make(chan *gpb.SubscribeResponse),
 		name: hostname,
@@ -109,6 +133,12 @@ func New(ctx context.Context, addr string, hostname string, sendMeta bool, opts 
 		c:      c,
 	}
 
+	for _, t := range tasks {
+		if err := gnmiserver.RegisterTask(t); err != nil {
+			return nil, "", err
+		}
+	}
+
 	gpb.RegisterGNMIServer(srv, gnmiserver)
 	// Forward streaming updates to clients.
 	c.cache.SetClient(subscribeSrv.Update)
@@ -137,7 +167,7 @@ type populateDefaultser interface {
 // NewSettable is different from New in that the returned collector is
 // schema-aware and supports gNMI Set. Currently it is not possible to change
 // the schema of a Collector after it is created.
-func NewSettable(ctx context.Context, addr string, hostname string, sendMeta bool, schema *ytypes.Schema, opts ...grpc.ServerOption) (*Collector, string, error) {
+func NewSettable(ctx context.Context, addr string, hostname string, sendMeta bool, schema *ytypes.Schema, tasks []Task, opts ...grpc.ServerOption) (*Collector, string, error) {
 	if !schema.IsValid() {
 		return nil, "", fmt.Errorf("cannot obtain valid schema for GoStructs: %v", schema)
 	}
@@ -148,7 +178,7 @@ func NewSettable(ctx context.Context, addr string, hostname string, sendMeta boo
 	}
 
 	// FIXME(wenbli): initialize the collector with default values.
-	collector, addr, err := New(ctx, addr, hostname, sendMeta, opts...)
+	collector, addr, err := New(ctx, addr, hostname, sendMeta, tasks, opts...)
 	if err != nil {
 		return nil, "", err
 	}

@@ -10,7 +10,6 @@ require (
 	github.com/openconfig/gnmi v0.0.0-20210527163611-d3a3e30199da
 	github.com/openconfig/goyang v0.2.9
 	github.com/openconfig/gribi v0.1.1-0.20211019025504-386ca81f79d0
-	github.com/openconfig/grpctunnel v0.0.0-20210610163803-fde4a9dc048d // indirect
 	github.com/openconfig/ygot v0.13.1
 	go.uber.org/atomic v1.7.0
 	google.golang.org/genproto v0.0.0-20201214200347-8c77b98c765d
@@ -18,3 +17,5 @@ require (
 	google.golang.org/protobuf v1.26.0
 	lukechampine.com/uint128 v1.1.1
 )
+
+replace github.com/openconfig/gnmi => github.com/wenovus/gnmi v0.0.0-20220114231359-cfbc69541310
