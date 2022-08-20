@@ -27,6 +27,7 @@ import (
 	"github.com/openconfig/gribigo/ocrt"
 	"github.com/openconfig/gribigo/server"
 	"github.com/openconfig/gribigo/sysrib"
+	gzebra "github.com/openconfig/lemming/sysrib"
 	"github.com/openconfig/ygot/ygot"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -34,6 +35,7 @@ import (
 
 	gpb "github.com/openconfig/gnmi/proto/gnmi"
 	spb "github.com/openconfig/gribi/v1/proto/service"
+	zpb "github.com/openconfig/lemming/proto/sysrib"
 )
 
 // Device is a wrapper struct that contains all functionalities
@@ -136,6 +138,40 @@ func TLSCredsFromFile(certFile, keyFile string) (*tlsCreds, error) {
 // IsDevOpt implements the DevOpt interface for tlsCreds.
 func (*tlsCreds) isDevOpt() {}
 
+// createSetRouteRequest converts a Route to a gZebra SetRouteRequest
+func createSetRouteRequest(prefix string, nexthops []*afthelper.NextHopSummary) (*zpb.SetRouteRequest, error) {
+	ip, ipnet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		log.Errorf("Cannot parse prefix %q as CIDR for calling gZebra", prefix)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("gribigo/sysrib: %v", err)
+	}
+	maskLength, _ := ipnet.Mask.Size()
+
+	var zNexthops []*zpb.Nexthop
+	for _, nhs := range nexthops {
+		zNexthops = append(zNexthops, &zpb.Nexthop{
+			Type:    zpb.Nexthop_IPV4,
+			Address: nhs.Address,
+			Weight:  uint64(nhs.Weight),
+		})
+	}
+
+	return &zpb.SetRouteRequest{
+		AdminDistance: 5,
+		ProtocolName:  "gRIBI",
+		Safi:          zpb.SetRouteRequest_UNICAST,
+		Prefix: &zpb.Prefix{
+			Family:     zpb.Prefix_IPv4,
+			Address:    ip.String(),
+			MaskLength: uint32(maskLength),
+		},
+		Nexthops: zNexthops,
+	}, nil
+}
+
 // New returns a new device with the specific context. It returns the device, and
 // an optional error. The servers can be stopped by cancelling the supplied context.
 func New(ctx context.Context, opts ...DevOpt) (*Device, error) {
@@ -164,6 +200,12 @@ func New(ctx context.Context, opts ...DevOpt) (*Device, error) {
 		return nil, fmt.Errorf("cannot build system RIB, %v", err)
 	}
 	d.sysRIB = sr
+
+	gzebraConn, err := grpc.DialContext(context.Background(), fmt.Sprintf("unix:%s", gzebra.SockAddr), grpc.WithBlock(), grpc.WithInsecure())
+	if err != nil {
+		return nil, fmt.Errorf("cannot dial to gZebra, %v", err)
+	}
+	gzebraClient := zpb.NewSysribClient(gzebraConn)
 
 	ribHookfn := func(o constants.OpType, ts int64, ni string, data ygot.ValidatedGoStruct) {
 		_, _, _ = o, ni, data
@@ -208,6 +250,17 @@ func New(ctx context.Context, opts ...DevOpt) (*Device, error) {
 			Prefix:   prefix,
 			NextHops: nhSum,
 		})
+
+		routeReq, err := createSetRouteRequest(prefix, nhSum)
+		if err != nil {
+			log.Errorf("Cannot create SetRouteRequest: %v", err)
+		}
+
+		resp, err := gzebraClient.SetRoute(context.Background(), routeReq)
+		if err != nil {
+			log.Errorf("Error sending route to gZebra: %v", err)
+		}
+		log.Infof("Sent route %v with response %v", routeReq, resp)
 	}
 
 	gr := optGRIBIAddr(opts)
@@ -215,7 +268,7 @@ func New(ctx context.Context, opts ...DevOpt) (*Device, error) {
 
 	creds := optTLSCreds(opts)
 	if creds == nil {
-		return nil, fmt.Errorf("must specific TLS credentials to start a server")
+		//return nil, fmt.Errorf("must specific TLS credentials to start a server")
 	}
 
 	gRIBIStop, err := d.startgRIBI(ctx, gr.host, gr.port, creds,
@@ -236,6 +289,7 @@ func New(ctx context.Context, opts ...DevOpt) (*Device, error) {
 		<-ctx.Done()
 		gNMIStop()
 		gRIBIStop()
+		gzebraConn.Close()
 	}()
 
 	return d, nil
@@ -286,13 +340,14 @@ func optTLSCreds(opts []DevOpt) *tlsCreds {
 // Start gRIBI starts the gRIBI server on the device on the specified host:port
 // and the specified TLS credentials, with the specified options.
 // It returns a function to stop the server, and error if the server cannot be started.
-func (d *Device) startgRIBI(ctx context.Context, host string, port int, creds *tlsCreds, opt ...server.ServerOpt) (func(), error) {
+func (d *Device) startgRIBI(ctx context.Context, host string, port int, _ *tlsCreds, opt ...server.ServerOpt) (func(), error) {
 	l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
 		return nil, fmt.Errorf("cannot create gRPC server for gRIBI, %v", err)
 	}
 
-	s := grpc.NewServer(grpc.Creds(creds.c))
+	//s := grpc.NewServer(grpc.Creds(creds.c))
+	s := grpc.NewServer()
 	ts, err := server.New(opt...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create gRIBI server, %v", err)
@@ -306,8 +361,9 @@ func (d *Device) startgRIBI(ctx context.Context, host string, port int, creds *t
 
 // startgNMI starts the gNMI server on the specified host:port. It returns a function
 // to stop the server, an error if one occurred.
-func (d *Device) startgNMI(ctx context.Context, host string, port int, creds *tlsCreds) (func(), error) {
-	c, addr, err := gnmit.New(ctx, fmt.Sprintf("%s:%d", host, port), targetName, true, grpc.Creds(creds.c))
+func (d *Device) startgNMI(ctx context.Context, host string, port int, _ *tlsCreds) (func(), error) {
+	//c, addr, err := gnmit.New(ctx, fmt.Sprintf("%s:%d", host, port), targetName, true, grpc.Creds(creds.c))
+	c, addr, err := gnmit.New(ctx, fmt.Sprintf("%s:%d", host, port), targetName, true)
 	if err != nil {
 		return nil, err
 	}

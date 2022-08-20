@@ -37,16 +37,16 @@ var (
 func main() {
 	flag.Parse()
 
-	if *certFile == "" || *keyFile == "" {
-		log.Exitf("must specify a TLS certificate and key file")
-	}
+	//if *certFile == "" || *keyFile == "" {
+	//	log.Exitf("must specify a TLS certificate and key file")
+	//}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	creds, err := device.TLSCredsFromFile(*certFile, *keyFile)
-	if err != nil {
-		log.Exitf("cannot initialise TLS, got: %v", err)
-	}
+	//creds, err := device.TLSCredsFromFile(*certFile, *keyFile)
+	//if err != nil {
+	//	log.Exitf("cannot initialise TLS, got: %v", err)
+	//}
 
 	gribiHost, gribiPort, err := splitHostPort(*gribi)
 	if err != nil {
@@ -57,7 +57,7 @@ func main() {
 		log.Exitf("cannot parse gnmi listen address: %s", err)
 	}
 
-	d, err := device.New(ctx, creds, device.GNMIAddr(gnmiHost, gnmiPort), device.GRIBIPort(gribiHost, gribiPort))
+	d, err := device.New(ctx, nil, device.GNMIAddr(gnmiHost, gnmiPort), device.GRIBIPort(gribiHost, gribiPort))
 	if err != nil {
 		log.Exitf("cannot start device, %v", err)
 	}
