@@ -153,7 +153,7 @@ func createSetRouteRequest(prefix string, nexthops []*afthelper.NextHopSummary) 
 	var zNexthops []*zpb.Nexthop
 	for _, nhs := range nexthops {
 		zNexthops = append(zNexthops, &zpb.Nexthop{
-			Type:    zpb.Nexthop_IPV4,
+			Type:    zpb.Nexthop_TYPE_IPV4,
 			Address: nhs.Address,
 			Weight:  uint64(nhs.Weight),
 		})
@@ -162,9 +162,9 @@ func createSetRouteRequest(prefix string, nexthops []*afthelper.NextHopSummary) 
 	return &zpb.SetRouteRequest{
 		AdminDistance: 5,
 		ProtocolName:  "gRIBI",
-		Safi:          zpb.SetRouteRequest_UNICAST,
+		Safi:          zpb.SetRouteRequest_SAFI_UNICAST,
 		Prefix: &zpb.Prefix{
-			Family:     zpb.Prefix_IPv4,
+			Family:     zpb.Prefix_FAMILY_IPV4,
 			Address:    ip.String(),
 			MaskLength: uint32(maskLength),
 		},
